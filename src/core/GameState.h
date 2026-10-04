@@ -22,12 +22,12 @@ public:
     const std::vector<Move>& lastUndone() const;
 
 private:
-    Board board_;
-    MoveHistory history_;
-    Stone sideToMove_ = Stone::Black;
-    GameResult result_ = GameResult::Ongoing;
-    ResultReason reason_ = ResultReason::None;
-    std::vector<Move> lastUndone_;
+    Board m_board;
+    MoveHistory m_history;
+    Stone m_sideToMove = Stone::Black;
+    GameResult m_result = GameResult::Ongoing;
+    ResultReason m_reason = ResultReason::None;
+    std::vector<Move> m_lastUndone;
 };
 
 } // namespace core

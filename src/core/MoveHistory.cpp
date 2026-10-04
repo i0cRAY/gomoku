@@ -3,24 +3,24 @@
 namespace core {
 
 void MoveHistory::push(const Move& m) {
-    moves_.push_back(m);
+    m_moves.push_back(m);
 }
 
 std::optional<Move> MoveHistory::pop() {
-    if (moves_.empty()) {
+    if (m_moves.empty()) {
         return std::nullopt;
     }
-    const Move m = moves_.back();
-    moves_.pop_back();
+    const Move m = m_moves.back();
+    m_moves.pop_back();
     return m;
 }
 
 const std::vector<Move>& MoveHistory::moves() const {
-    return moves_;
+    return m_moves;
 }
 
 std::size_t MoveHistory::size() const {
-    return moves_.size();
+    return m_moves.size();
 }
 
 } // namespace core

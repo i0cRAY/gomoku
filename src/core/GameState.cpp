@@ -5,78 +5,78 @@
 namespace core {
 
 bool GameState::play(Pos p, std::int64_t timeUsedMs) {
-    if (result_ != GameResult::Ongoing) {
+    if (m_result != GameResult::Ongoing) {
         return false;
     }
-    if (!Rules::isLegal(board_, p)) {
+    if (!Rules::isLegal(m_board, p)) {
         return false;
     }
 
-    const Stone color = sideToMove_;
-    board_.place(p, color);
-    history_.push(Move{p, color, timeUsedMs});
+    const Stone color = m_sideToMove;
+    m_board.place(p, color);
+    m_history.push(Move{p, color, timeUsedMs});
 
-    if (Rules::makesFive(board_, p)) {
-        result_ = color == Stone::Black ? GameResult::BlackWin : GameResult::WhiteWin;
-        reason_ = ResultReason::FiveInRow;
-    } else if (Rules::isFull(board_)) {
-        result_ = GameResult::Draw;
-        reason_ = ResultReason::BoardFull;
+    if (Rules::makesFive(m_board, p)) {
+        m_result = color == Stone::Black ? GameResult::BlackWin : GameResult::WhiteWin;
+        m_reason = ResultReason::FiveInRow;
+    } else if (Rules::isFull(m_board)) {
+        m_result = GameResult::Draw;
+        m_reason = ResultReason::BoardFull;
     } else {
-        sideToMove_ = opponent(color);
+        m_sideToMove = opponent(color);
     }
     return true;
 }
 
 bool GameState::undo(int plies) {
-    if (result_ != GameResult::Ongoing) {
+    if (m_result != GameResult::Ongoing) {
         return false;
     }
-    if (plies <= 0 || static_cast<std::size_t>(plies) > history_.size()) {
+    if (plies <= 0 || static_cast<std::size_t>(plies) > m_history.size()) {
         return false;
     }
 
-    lastUndone_.clear();
+    m_lastUndone.clear();
     for (int i = 0; i < plies; ++i) {
-        const auto m = history_.pop();
-        board_.remove(m->pos);
-        lastUndone_.push_back(*m);
+        const auto m = m_history.pop();
+        m_board.remove(m->pos);
+        m_lastUndone.push_back(*m);
     }
-    sideToMove_ = lastUndone_.back().color;
+    m_sideToMove = m_lastUndone.back().color;
     return true;
 }
 
 void GameState::finish(GameResult r, ResultReason why) {
     // First result wins: a late timeout/disconnect must not overwrite it.
-    if (result_ != GameResult::Ongoing) {
+    if (m_result != GameResult::Ongoing) {
         return;
     }
-    result_ = r;
-    reason_ = why;
+    m_result = r;
+    m_reason = why;
 }
 
 const Board& GameState::board() const {
-    return board_;
+    return m_board;
 }
 
 const MoveHistory& GameState::history() const {
-    return history_;
+    return m_history;
 }
 
 Stone GameState::sideToMove() const {
-    return sideToMove_;
+    return m_sideToMove;
 }
 
 GameResult GameState::result() const {
-    return result_;
+    return m_result;
 }
 
 ResultReason GameState::reason() const {
-    return reason_;
+    return m_reason;
 }
 
 const std::vector<Move>& GameState::lastUndone() const {
-    return lastUndone_;
+    return m_lastUndone;
 }
 
 } // namespace core

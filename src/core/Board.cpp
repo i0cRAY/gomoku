@@ -28,7 +28,7 @@ const ZobristTable& zobristTable() {
 } // namespace
 
 Board::Board() {
-    cells_.fill(Stone::Empty);
+    m_cells.fill(Stone::Empty);
 }
 
 int Board::index(Pos p) {
@@ -36,7 +36,7 @@ int Board::index(Pos p) {
 }
 
 Stone Board::at(Pos p) const {
-    return cells_[index(p)];
+    return m_cells[index(p)];
 }
 
 bool Board::inBounds(Pos p) const {
@@ -49,25 +49,25 @@ bool Board::isEmpty(Pos p) const {
 
 void Board::place(Pos p, Stone s) {
     const int idx = index(p);
-    cells_[idx] = s;
-    hash_ ^= zobristTable()[idx][static_cast<std::size_t>(s)];
-    ++stoneCount_;
+    m_cells[idx] = s;
+    m_hash ^= zobristTable()[idx][static_cast<std::size_t>(s)];
+    ++m_stoneCount;
 }
 
 void Board::remove(Pos p) {
     const int idx = index(p);
-    const Stone s = cells_[idx];
-    hash_ ^= zobristTable()[idx][static_cast<std::size_t>(s)];
-    cells_[idx] = Stone::Empty;
-    --stoneCount_;
+    const Stone s = m_cells[idx];
+    m_hash ^= zobristTable()[idx][static_cast<std::size_t>(s)];
+    m_cells[idx] = Stone::Empty;
+    --m_stoneCount;
 }
 
 int Board::stoneCount() const {
-    return stoneCount_;
+    return m_stoneCount;
 }
 
 std::uint64_t Board::hash() const {
-    return hash_;
+    return m_hash;
 }
 
 } // namespace core

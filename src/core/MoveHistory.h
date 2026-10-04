@@ -15,7 +15,7 @@ public:
     std::size_t size() const;
 
 private:
-    std::vector<Move> moves_;
+    std::vector<Move> m_moves;
 };
 
 } // namespace core

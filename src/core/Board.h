@@ -24,9 +24,9 @@ public:
 private:
     static int index(Pos p);
 
-    std::array<Stone, kSize * kSize> cells_;
-    int stoneCount_ = 0;
-    std::uint64_t hash_ = 0;
+    std::array<Stone, kSize * kSize> m_cells;
+    int m_stoneCount = 0;
+    std::uint64_t m_hash = 0;
 };
 
 } // namespace core
