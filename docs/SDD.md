@@ -1,0 +1,488 @@
+# 五子棋 Gomoku — 軟體設計文件（SDD）
+
+| 項目 | 內容 |
+|---|---|
+| 作者 | 林希叡 |
+| 版本 | 0.1（草稿） |
+| 日期 | 2026-10-04 |
+| 語言／框架 | C++17、Qt 6（Widgets、Network）、GoogleTest、CMake |
+
+---
+
+## 1. 簡介
+
+### 1.1 目的
+一款桌面五子棋遊戲，支援人對電腦、電腦對電腦與區網連線對戰，提供正常與限時兩種模式，以及存讀檔、悔棋、棋譜回放、AI 提示等功能。本專案特別著重 AI 棋力。
+
+### 1.2 範圍
+**這版要做：**
+- 對戰類型：人對人（區網連線）、人對電腦（簡單／普通／困難）、電腦對電腦
+- 模式：正常對戰、限時（每步限時，秒數可自訂）
+- 功能：存檔／讀檔、悔棋、棋譜紀錄與回放、AI 提示
+
+**這版不做：**
+- 禁手規則（Renju）
+- 跨網際網路連線（NAT 穿透）、線上配對、帳號系統
+- 同一台電腦上的本機雙人對戰（見 §11 待確認）
+- 音效、主題換膚
+
+### 1.3 名詞
+| 名詞 | 意義 |
+|---|---|
+| 步（ply） | 一方落一子 |
+| 局面 | 某一時刻棋盤上所有棋子的狀態 |
+| 活四／衝四／活三… | 棋型，定義見 §5.3.2 |
+| Host | 區網連線中開房的一方，同時擔任 server |
+| Guest | 區網連線中加入的一方，擔任 client |
+
+---
+
+## 2. 需求
+
+### 2.1 對戰類型
+| 類型 | 黑方 | 白方 | 備註 |
+|---|---|---|---|
+| 人對電腦 | 玩家可選執黑或執白 | 另一方為 AI | AI 難度三選一 |
+| 電腦對電腦 | AI | AI | 雙方難度可分別設定；每步間隔 500 ms 方便觀看 |
+| 區網連線 | Host 或 Guest | 另一方 | Host 開房時選擇自己的顏色，預設執黑 |
+
+### 2.2 模式
+| 模式 | 說明 |
+|---|---|
+| 正常對戰 | 不計時 |
+| 限時 | 每步限時，規則見 §3.2 |
+
+### 2.3 功能需求
+| 編號 | 功能 | 說明 |
+|---|---|---|
+| F1 | 落子 | 點擊棋盤交叉點落子；非法位置無反應 |
+| F2 | 勝負判定 | 每步後判斷連五、和局、超時 |
+| F3 | 悔棋 | 規則見 §7.2 |
+| F4 | 存檔 | 將對局（含時間狀態）存成檔案，可在之後讀回繼續 |
+| F5 | 讀檔 | 讀回存檔繼續對局；檔案格式錯誤或棋步不合法時拒絕並提示 |
+| F6 | 棋譜紀錄 | 對局結束後可匯出棋譜 |
+| F7 | 棋譜回放 | 讀入棋譜，可上一步／下一步／跳到開頭結尾／自動播放 |
+| F8 | AI 提示 | 在棋盤上標示建議落點，不自動落子 |
+| F9 | 認輸 | 任一玩家可認輸 |
+
+### 2.4 非功能需求
+| 編號 | 需求 |
+|---|---|
+| N1 | AI 思考期間 UI 不可卡頓，可正常拖動視窗與點按鈕 |
+| N2 | AI 在困難難度下每步不超過 5 秒（限時模式下另受剩餘時間限制） |
+| N3 | core 與 ai 模組有單元測試，CI 每次 push 自動編譯並跑測試 |
+| N4 | 相同局面與參數下 AI 結果可重現 |
+
+---
+
+## 3. 遊戲規則
+
+### 3.1 基本規則
+- 棋盤 15×15，座標 `(row, col)`，皆從 0 開始，`(0,0)` 在左上角
+- 黑先，輪流落子，只能下在空的交叉點
+- 連成五子（含）以上即勝，無禁手
+- 棋盤下滿且無人連五為和局
+
+### 3.2 限時規則
+1. **每步限時**：開局前設定每步秒數，範圍 5–300 秒，預設 30 秒。
+2. **計時方式**：輪到某方時開始倒數；該方落子後計時停止，換對方從完整時間開始倒數。
+3. **超時**：剩餘時間歸零立即判負，結果原因為 `Timeout`。超時後送達的落子一律無效。
+4. **悔棋**：回到被撤銷那步之前的局面，輪到的那方的剩餘時間恢復為**他當初下那步時所剩的時間**（＝每步限時 − 該步已用時間）。
+   > 例：限時 30 秒，黑方花 12 秒下了第 5 步。悔棋撤銷第 5 步後，輪到黑方，黑方剩 18 秒。
+5. **AI 提示**：提示計算期間計時暫停，提示結果顯示（或取消）後恢復計時。
+6. **電腦方**：同樣受每步限時約束，AI 搜尋時間上限 = min(難度設定上限, 剩餘時間 − 300 ms 緩衝)。
+7. **連線**：計時以 Host 為準，詳見 §6.2。
+
+---
+
+## 4. 架構
+
+### 4.1 分層
+
+```
+┌────────────────────────────────────────────┐
+│ ui    MainWindow, BoardView, 對話框, ClockWidget │
+├────────────────────────────────────────────┤
+│ app   GameController, Player（Human/AI/Remote） │
+├──────────────────────┬─────────────────────┤
+│ net  NetworkSession   │ ai  AIEngine, AIWorker │
+├──────────────────────┴─────────────────────┤
+│ core  Board, Rules, MoveHistory, GameState,  │
+│       GameClock, SaveFormat（純 C++，無 Qt）  │
+└────────────────────────────────────────────┘
+```
+依賴方向只能往下：ui / net / app → ai → core。core 不 include 任何 Qt 標頭，因此可以單獨用 GoogleTest 測試。
+
+### 4.2 職責對應
+
+| 職責 | 模組 | 主要類別 |
+|---|---|---|
+| 記錄棋盤每個位置的狀態 | core | `Board` |
+| 判斷能不能下、有沒有連五 | core | `Rules` |
+| 記錄每一步棋的順序 | core | `MoveHistory` |
+| 限時模式計時 | core | `GameClock` |
+| 存讀檔、棋譜格式 | core | `SaveFormat` |
+| 幫電腦決定下哪裡 | ai | `AIEngine`、`Evaluator`、`AIWorker` |
+| 和另一台電腦傳送棋步 | net | `NetworkSession` |
+| 管理輪到誰、開始與結束 | app | `GameController` |
+| 畫棋盤、接收點擊 | ui | `BoardView` |
+
+### 4.3 Player 抽象
+`GameController` 不直接區分對戰類型，而是持有黑、白兩個 `Player`：
+
+| 實作 | 取得下一步的方式 |
+|---|---|
+| `HumanPlayer` | 等待 `BoardView` 的點擊 |
+| `AIPlayer` | 交給 `AIWorker` 在背景執行緒搜尋 |
+| `RemotePlayer` | 等待 `NetworkSession` 收到對方棋步 |
+
+三種對戰類型只是不同的 Player 組合，GameController 的流程只有一套。
+
+---
+
+## 5. 模組設計
+
+以下為公開介面草案，實作時可調整，但改動需同步更新本文件。
+
+### 5.1 core
+
+```cpp
+enum class Stone : std::uint8_t { Empty, Black, White };
+Stone opponent(Stone s);
+
+struct Pos {
+    int row;
+    int col;
+    bool operator==(const Pos&) const = default;
+};
+
+struct Move {
+    Pos pos;
+    Stone color;
+    std::int64_t timeUsedMs;   // 該步花費的時間；非限時模式為 0
+};
+
+enum class GameResult  { Ongoing, BlackWin, WhiteWin, Draw };
+enum class ResultReason { None, FiveInRow, Timeout, BoardFull, Resign, Disconnect };
+```
+
+**Board**
+```cpp
+class Board {
+public:
+    static constexpr int kSize = 15;
+    Stone at(Pos p) const;
+    bool  inBounds(Pos p) const;
+    bool  isEmpty(Pos p) const;
+    void  place(Pos p, Stone s);   // 前置條件：inBounds 且 isEmpty
+    void  remove(Pos p);
+    int   stoneCount() const;
+    std::uint64_t hash() const;    // Zobrist hash，供 AI 置換表使用，place/remove 時增量更新
+};
+```
+
+**Rules**（無狀態）
+```cpp
+namespace Rules {
+    bool isLegal(const Board& b, Pos p);
+    bool makesFive(const Board& b, Pos lastMove);   // 檢查 lastMove 所在四個方向是否 ≥ 5 連
+    bool isFull(const Board& b);
+}
+```
+
+**MoveHistory**
+```cpp
+class MoveHistory {
+public:
+    void push(const Move& m);
+    std::optional<Move> pop();
+    const std::vector<Move>& moves() const;
+    std::size_t size() const;
+};
+```
+
+**GameClock**（時間來源以介面注入，測試時使用假時鐘）
+```cpp
+class ITimeSource {
+public:
+    virtual ~ITimeSource() = default;
+    virtual std::int64_t nowMs() const = 0;
+};
+
+class GameClock {
+public:
+    GameClock(const ITimeSource& time, std::int64_t moveLimitMs);
+    void startTurn();                              // 從完整限時開始倒數
+    void startTurnWith(std::int64_t remainingMs);  // 悔棋或讀檔時使用
+    std::int64_t stopTurn();                       // 停止並回傳本步已用時間
+    void pause();                                  // AI 提示時使用
+    void resume();
+    std::int64_t remainingMs() const;
+    bool isExpired() const;
+    bool isRunning() const;
+};
+```
+
+**GameState**
+```cpp
+class GameState {
+public:
+    bool play(Pos p, std::int64_t timeUsedMs);   // 合法則落子、記錄、更新結果
+    bool undo(int plies);                         // 回傳是否成功；回傳後可從 lastUndone() 取得被撤銷的步
+    void finish(GameResult r, ResultReason why);  // 超時、認輸、斷線時由外部呼叫
+    const Board&       board() const;
+    const MoveHistory& history() const;
+    Stone        sideToMove() const;
+    GameResult   result() const;
+    ResultReason reason() const;
+};
+```
+
+**SaveFormat**：存檔與棋譜的序列化／反序列化，格式見 §6.1。core 不可依賴 Qt，因此 JSON 處理在此層自行實作最小版本，或改由 app 層用 `QJsonDocument` 處理（見 §11 待確認）。
+
+### 5.2 ai
+
+```cpp
+struct SearchParams {
+    int maxDepth;
+    std::int64_t timeLimitMs;
+    int candidateRadius = 2;    // 只考慮已有棋子周圍 N 格內的空點
+    int maxCandidates   = 20;   // 排序後只展開前 N 個候選步
+};
+
+struct SearchResult {
+    Pos best;
+    int score;
+    int depthReached;
+    std::int64_t nodes;
+    bool cancelled;
+};
+
+class AIEngine {
+public:
+    SearchResult search(const Board& b, Stone side, const SearchParams& params,
+                        const std::atomic<bool>& cancel, const ITimeSource& time);
+};
+```
+
+#### 5.2.1 搜尋
+- **迭代加深**：深度 1, 2, 3… 逐層搜尋；時間到或被取消時，回傳最後一個完整搜完的深度的結果
+- **Negamax + Alpha-Beta 剪枝**
+- **候選步產生**：只取已有棋子周圍 `candidateRadius` 格內的空點；空盤時下天元 `(7,7)`
+- **著法排序**：先用快速評估排序候選步，提高剪枝效率；上一層的最佳步優先
+- **戰術優先**：自己能連五先下；對方能連五必擋；之後才進入一般搜尋
+- **置換表**：以 `Board::hash()` 為 key 快取已搜過的局面（可在里程碑 4 後期再加入）
+- 不使用亂數，確保結果可重現
+
+#### 5.2.2 評估函數
+對雙方在四個方向上的棋型計分，局面分 = 己方分數 − 對方分數 × 1.1（略偏重防守）。
+
+| 棋型 | 定義 | 分數（初值，待調整） |
+|---|---|---|
+| 連五 | 五子相連 | 10,000,000 |
+| 活四 | 四子相連，兩端皆空 | 100,000 |
+| 衝四 | 四子，只有一個點能成五 | 10,000 |
+| 活三 | 能形成活四的三子 | 5,000 |
+| 眠三 | 只能形成衝四的三子 | 500 |
+| 活二 | 能形成活三的二子 | 200 |
+| 眠二 | 只能形成眠三的二子 | 50 |
+
+#### 5.2.3 難度
+| 難度 | maxDepth | timeLimitMs | 其他 |
+|---|---|---|---|
+| 簡單 | 2 | 1,000 | maxCandidates = 8 |
+| 普通 | 4 | 3,000 | — |
+| 困難 | 10（迭代加深） | 5,000 | 啟用置換表 |
+| 提示 | 同困難 | 3,000 | — |
+
+限時模式下 `timeLimitMs` 再取 min(上表數值, 剩餘時間 − 300 ms)。
+
+#### 5.2.4 執行緒
+- `AIWorker`（QObject）以 `moveToThread` 放進專用 `QThread`
+- `GameController` 透過 signal 發出搜尋請求，附上 `requestId`
+- `AIWorker` 完成後以 signal 回傳 `(requestId, SearchResult)`
+- 悔棋、讀檔、離開對局、超時時：設定取消旗標，並遞增 `requestId`；收到舊 `requestId` 的結果直接丟棄
+
+### 5.3 net
+
+#### 5.3.1 角色
+- Host 以 `QTcpServer` 監聽，預設 port **45678**（可在開房對話框修改）
+- Guest 輸入 Host 的 IP 與 port，以 `QTcpSocket` 連線
+- Host 持有唯一權威的 `GameState` 與 `GameClock`；Host 自己的落子也走同一套驗證流程
+
+#### 5.3.2 協定
+每則訊息為一行 UTF-8 JSON，以 `\n` 結尾。每則訊息都有 `type` 欄位。
+
+| type | 方向 | 欄位 | 說明 |
+|---|---|---|---|
+| `HELLO` | G→H | `version`, `name` | 連線後第一則訊息 |
+| `WELCOME` | H→G | `yourColor`, `timed`, `moveLimitMs` | 開局資訊；版本不符則改送 `REJECT` 並斷線 |
+| `MOVE_REQUEST` | G→H | `row`, `col` | Guest 想下的位置 |
+| `MOVE` | H→G | `row`, `col`, `color`, `moveNo` | Host 確認後的棋步（雙方的棋步都會送） |
+| `REJECT` | H→G | `reason` | 落子被拒（不合法、不是你的回合、已超時） |
+| `CLOCK` | H→G | `side`, `remainingMs` | 限時模式下每 500 ms 廣播一次 |
+| `UNDO_REQUEST` | 雙向 | — | 請求悔棋 |
+| `UNDO_REPLY` | 雙向 | `accept` | 回覆悔棋請求 |
+| `UNDO` | H→G | `plies`, `sideToMove`, `remainingMs` | Host 執行悔棋後的結果 |
+| `RESIGN` | 雙向 | — | 認輸 |
+| `GAME_OVER` | H→G | `result`, `reason` | 對局結束 |
+| `PING` / `PONG` | 雙向 | — | 每 2 秒一次心跳；10 秒未收到任何訊息視為斷線 |
+
+斷線時，仍在線的一方判勝，原因 `Disconnect`。
+
+### 5.4 ui
+| 元件 | 說明 |
+|---|---|
+| `MainWindow` | 選單（新對局、存檔、讀檔、匯出棋譜、回放）、工具列（悔棋、提示、認輸） |
+| `BoardView` | QPainter 繪製格線、星位、棋子；標示最後一步與提示位置；點擊時將座標換算為最近的交叉點，距離超過格距 40% 則忽略 |
+| `NewGameDialog` | 選擇對戰類型、顏色、難度、模式、每步秒數 |
+| `NetworkDialog` | 開房（顯示本機 IP 與 port）或加入（輸入 IP 與 port） |
+| `ClockWidget` | 顯示雙方剩餘時間；剩 5 秒以下變紅 |
+| `ReplayControls` | 回放時的上一步／下一步／開頭／結尾／自動播放 |
+
+### 5.5 app — GameController 狀態
+
+```
+Idle ──開局──▶ WaitingMove ──收到合法步──▶ WaitingMove（換邊）
+                  │  │                         │
+                  │  └─提示──▶ WaitingHint ─結果─┘（回到 WaitingMove）
+                  │
+                  └─連五／和局／超時／認輸／斷線──▶ GameOver
+Idle ──讀棋譜──▶ Replaying
+```
+- 限時模式下，`GameController` 用 QTimer 每 100 ms 檢查 `GameClock::isExpired()`
+- 落子到達時再檢查一次：若該步用時超過限時，視為超時，落子無效
+
+---
+
+## 6. 資料格式
+
+### 6.1 存檔與棋譜
+存檔與棋譜共用同一格式，副檔名 `.gomoku.json`。對局未結束時 `result` 為 `null`。
+
+```json
+{
+  "format": "gomoku",
+  "version": 1,
+  "createdAt": "2026-10-04T21:40:00+08:00",
+  "matchType": "human_vs_ai",
+  "players": {
+    "black": { "type": "human" },
+    "white": { "type": "ai", "difficulty": "hard" }
+  },
+  "timeControl": { "mode": "per_move", "moveLimitMs": 30000 },
+  "moves": [
+    { "r": 7, "c": 7, "t": 4210 },
+    { "r": 7, "c": 8, "t": 1830 }
+  ],
+  "current": { "remainingMs": 18000 },
+  "result": null
+}
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `matchType` | `human_vs_ai`、`ai_vs_ai`、`lan` |
+| `timeControl.mode` | `none` 或 `per_move` |
+| `moves[].t` | 該步已用毫秒數；非限時模式為 0。悔棋恢復時間依此計算 |
+| `current.remainingMs` | 存檔當下輪到的一方剩餘時間；非限時模式省略 |
+| `result` | 結束時為 `{ "winner": "black" | "white" | null, "reason": "five_in_row" | "timeout" | ... }` |
+
+**讀檔驗證**：從空盤依序重播 `moves`，每一步都用 `Rules::isLegal` 檢查；任何一步不合法、或結果與 `result` 不符，即拒絕讀檔。
+
+### 6.2 連線計時
+- 只有 Host 的 `GameClock` 會判定超時
+- Guest 依 `CLOCK` 訊息顯示時間，兩次訊息之間自行倒數以保持畫面流暢，但不做判定
+- 是否超時以 Host 收到 `MOVE_REQUEST` 的時間為準
+
+---
+
+## 7. 主要流程
+
+### 7.1 一步棋
+1. `GameController` 通知目前的 `Player` 輪到他，限時模式則 `GameClock::startTurn()`
+2. Player 回報落點
+3. `GameClock::stopTurn()` 取得用時；若已超時 → GameOver(`Timeout`)
+4. `GameState::play()`；不合法則忽略並繼續等待
+5. 檢查結果：連五 → GameOver(`FiveInRow`)；盤滿 → GameOver(`BoardFull`)
+6. 換邊，回到第 1 步
+
+### 7.2 悔棋
+| 對戰類型 | 行為 |
+|---|---|
+| 人對電腦 | 撤銷兩步（AI 的一步 + 玩家的一步），回到玩家的回合。若 AI 正在思考，先取消搜尋，再撤銷玩家的一步 |
+| 電腦對電腦 | 不提供悔棋 |
+| 區網連線 | 需對方同意。等待回覆期間計時暫停；15 秒未回覆視為拒絕。同意後撤銷到請求方的回合 |
+
+共同規則：
+- 對局結束後不可悔棋
+- 沒有可撤銷的步時按鈕停用
+- 限時模式下，悔棋後輪到的那方剩餘時間 = 每步限時 − 被撤銷那步的 `timeUsedMs`（見 §3.2 第 4 點）
+
+### 7.3 AI 提示
+1. 只有輪到人類玩家時可用；區網連線模式不提供（見 §11）
+2. 限時模式下 `GameClock::pause()`
+3. 以「提示」參數搜尋
+4. 在棋盤上標示建議落點，`GameClock::resume()`
+5. 玩家落子後標示消失
+
+---
+
+## 8. 測試計畫
+
+| 模組 | 測試情境 |
+|---|---|
+| Board | 落子、移除、邊界檢查；Zobrist hash 在 place/remove 後與重新計算一致 |
+| Rules | 橫、直、兩斜四方向連五；六連也算勝；四子不算勝；棋盤邊緣與角落；非法位置（越界、已有棋子） |
+| MoveHistory | push/pop 順序；空時 pop 回傳空值 |
+| GameClock | 倒數正確；歸零 `isExpired`；`stopTurn` 回傳用時；`pause` 期間不扣時間；`startTurnWith` 恢復指定時間（全部用假時鐘，不 sleep） |
+| GameState | 黑先；輪流；勝負後拒絕落子；悔棋後局面與輪次正確；盤滿和局 |
+| 限時規則 | 超時判負；超時後的落子無效；悔棋恢復 18 秒的範例；提示期間不扣時間 |
+| SaveFormat | 存檔後讀回完全一致；非法棋步拒絕讀取；缺欄位、版本不符時拒絕 |
+| AIEngine | 一步連五必下；對方活四／衝四必擋；己方能做活四時優先；相同輸入結果一致；時間上限內回傳；取消後立即返回 |
+| Evaluator | 各棋型辨識正確（每種棋型至少一個正例、一個反例） |
+| 協定（net） | 訊息序列化／反序列化；不合法 JSON 不會崩潰 |
+
+連線、UI 以手動測試為主，測試步驟記錄於 `docs/manual-test.md`。
+
+---
+
+## 9. 里程碑
+
+| # | 內容 | 完成標準 |
+|---|---|---|
+| 0 | 專案骨架 | CMake 能編出空視窗；一個空測試通過；CI 綠燈 |
+| 1 | core：Board、Rules、MoveHistory、GameState | 對應測試全過 |
+| 2 | UI：畫棋盤、點擊落子 | 能在單機上完成一局並判定勝負 |
+| 3 | 存讀檔、棋譜、回放 | SaveFormat 測試全過；回放可操作 |
+| 4 | AI：搜尋、評估、難度 | AIEngine 測試全過；困難難度能擋住基本戰術 |
+| 5 | AI 背景執行緒、人對電腦、電腦對電腦、AI 提示 | AI 思考時 UI 不卡；悔棋能取消搜尋 |
+| 6 | 限時模式 | GameClock 與限時規則測試全過 |
+| 7 | 區網連線 | 兩台電腦能完成一局，含悔棋、超時、斷線 |
+| 8 | 收尾 | 手動測試清單全部通過 |
+
+---
+
+## 10. 設計權衡
+
+| 問題 | 選擇 | 理由 |
+|---|---|---|
+| 連線架構：client-server 或 P2P | client-server（Host 兼任 server） | 只有一方持有權威狀態，避免兩邊不同步；兩人對戰不需要另外架設伺服器 |
+| GUI 框架：Qt 或 SFML | Qt | 視窗、對話框、網路、多執行緒都有完整支援 |
+| AI 演算法：Minimax + Alpha-Beta 或 MCTS | Minimax + Alpha-Beta | 除錯容易、戰術計算強；五子棋分支多但可用候選步限制 |
+| 計時放在哪一層 | core，時間來源注入 | 可用假時鐘測試超時，不需真的等待 |
+| 對戰類型怎麼實作 | Player 抽象 | 三種對戰類型共用同一套 GameController 流程 |
+| 連線協定格式 | 一行一則 JSON | 好讀好除錯，Qt 內建 JSON 支援；傳輸量很小，不需二進位格式 |
+| 悔棋時間 | 恢復當時剩餘時間，而非重新給滿 | 避免利用悔棋獲得額外思考時間 |
+
+---
+
+## 11. 待確認
+
+以下目前採用預設值，可以改：
+
+1. **本機雙人對戰**：目前不做。實作成本很低（兩個 `HumanPlayer`），也方便測試，是否加入？
+2. **區網連線的 AI 提示**：目前不提供（公平性，且暫停計時會讓對方空等）。
+3. **區網對局能否存檔續玩**：目前只能在結束後匯出棋譜，不能存到一半之後再連線續玩。
+4. **SaveFormat 的 JSON 處理**：core 不能用 Qt，選項為 (a) core 自行實作簡單 JSON 寫讀；(b) SaveFormat 移到 app 層使用 `QJsonDocument`，core 只提供資料結構。建議 (b)。
+5. **電腦對電腦**：是否需要暫停／繼續、調整播放速度？
