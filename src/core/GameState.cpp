@@ -29,6 +29,8 @@ bool GameState::play(Pos p, std::int64_t timeUsedMs) {
 }
 
 bool GameState::undo(int plies) {
+    // Cleared up front so a failed undo never exposes a previous undo's moves.
+    m_lastUndone.clear();
     if (m_result != GameResult::Ongoing) {
         return false;
     }
@@ -36,7 +38,6 @@ bool GameState::undo(int plies) {
         return false;
     }
 
-    m_lastUndone.clear();
     for (int i = 0; i < plies; ++i) {
         const auto m = m_history.pop();
         m_board.remove(m->pos);

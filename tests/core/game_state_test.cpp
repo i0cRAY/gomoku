@@ -101,6 +101,17 @@ TEST(GameState, UndoMoreThanPlayedFails) {
     EXPECT_FALSE(g.undo(2));
 }
 
+TEST(GameState, FailedUndoClearsLastUndone) {
+    GameState g;
+    ASSERT_TRUE(g.play({7, 7}, 0));
+    ASSERT_TRUE(g.play({7, 8}, 0));
+    ASSERT_TRUE(g.undo(1));
+    ASSERT_EQ(g.lastUndone().size(), 1u);
+
+    EXPECT_FALSE(g.undo(5));
+    EXPECT_TRUE(g.lastUndone().empty());
+}
+
 TEST(GameState, UndoAfterGameOverFails) {
     GameState g;
     for (int c = 0; c < 4; ++c) {
