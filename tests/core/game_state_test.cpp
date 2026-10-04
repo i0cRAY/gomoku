@@ -118,3 +118,18 @@ TEST(GameState, FinishSetsResultAndReason) {
     EXPECT_EQ(g.reason(), ResultReason::Resign);
     EXPECT_FALSE(g.play({0, 0}, 0));
 }
+
+TEST(GameState, FinishDoesNotOverrideExistingResult) {
+    GameState g;
+    for (int c = 0; c < 4; ++c) {
+        ASSERT_TRUE(g.play({0, c}, 0));
+        ASSERT_TRUE(g.play({1, c}, 0));
+    }
+    ASSERT_TRUE(g.play({0, 4}, 0));   // black wins by five
+    ASSERT_EQ(g.result(), GameResult::BlackWin);
+
+    g.finish(GameResult::WhiteWin, ResultReason::Disconnect);
+
+    EXPECT_EQ(g.result(), GameResult::BlackWin);
+    EXPECT_EQ(g.reason(), ResultReason::FiveInRow);
+}

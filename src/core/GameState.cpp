@@ -47,6 +47,10 @@ bool GameState::undo(int plies) {
 }
 
 void GameState::finish(GameResult r, ResultReason why) {
+    // First result wins: a late timeout/disconnect must not overwrite it.
+    if (result_ != GameResult::Ongoing) {
+        return;
+    }
     result_ = r;
     reason_ = why;
 }
