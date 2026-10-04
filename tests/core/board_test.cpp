@@ -66,3 +66,45 @@ TEST(Board, ZobristHashDiffersForDifferentBoards) {
 
     EXPECT_NE(a.hash(), b.hash());
 }
+
+// Precondition violations abort via assert, which only exists in debug builds.
+class BoardDeathTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+#ifdef NDEBUG
+        GTEST_SKIP() << "asserts are disabled in release builds";
+#endif
+    }
+};
+
+TEST_F(BoardDeathTest, AtOutOfBoundsAborts) {
+    Board b;
+    EXPECT_DEATH(b.at({-1, 0}), "");
+    EXPECT_DEATH(b.at({0, Board::kSize}), "");
+}
+
+TEST_F(BoardDeathTest, PlaceOutOfBoundsAborts) {
+    Board b;
+    EXPECT_DEATH(b.place({Board::kSize, 0}, Stone::Black), "");
+}
+
+TEST_F(BoardDeathTest, PlaceOnOccupiedAborts) {
+    Board b;
+    b.place({7, 7}, Stone::Black);
+    EXPECT_DEATH(b.place({7, 7}, Stone::White), "");
+}
+
+TEST_F(BoardDeathTest, PlaceEmptyStoneAborts) {
+    Board b;
+    EXPECT_DEATH(b.place({7, 7}, Stone::Empty), "");
+}
+
+TEST_F(BoardDeathTest, RemoveFromEmptyCellAborts) {
+    Board b;
+    EXPECT_DEATH(b.remove({7, 7}), "");
+}
+
+TEST_F(BoardDeathTest, RemoveOutOfBoundsAborts) {
+    Board b;
+    EXPECT_DEATH(b.remove({0, -1}), "");
+}

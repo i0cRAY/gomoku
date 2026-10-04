@@ -1,5 +1,6 @@
 #include "Board.h"
 
+#include <cassert>
 #include <random>
 
 namespace core {
@@ -36,6 +37,7 @@ int Board::index(Pos p) {
 }
 
 Stone Board::at(Pos p) const {
+    assert(inBounds(p));
     return m_cells[index(p)];
 }
 
@@ -48,6 +50,8 @@ bool Board::isEmpty(Pos p) const {
 }
 
 void Board::place(Pos p, Stone s) {
+    assert(s != Stone::Empty);
+    assert(isEmpty(p));
     const int idx = index(p);
     m_cells[idx] = s;
     m_hash ^= zobristTable()[idx][static_cast<std::size_t>(s)];
@@ -55,6 +59,7 @@ void Board::place(Pos p, Stone s) {
 }
 
 void Board::remove(Pos p) {
+    assert(!isEmpty(p));
     const int idx = index(p);
     const Stone s = m_cells[idx];
     m_hash ^= zobristTable()[idx][static_cast<std::size_t>(s)];
