@@ -177,3 +177,14 @@ TEST(GameState, FinishDoesNotOverrideExistingResult) {
     EXPECT_EQ(g.result(), GameResult::BlackWin);
     EXPECT_EQ(g.reason(), ResultReason::FiveInRow);
 }
+
+TEST(GameState, FinishWithOngoingIsIgnored) {
+    GameState g;
+    ASSERT_TRUE(g.play({7, 7}, 0));
+
+    g.finish(GameResult::Ongoing, ResultReason::Resign);
+
+    EXPECT_EQ(g.result(), GameResult::Ongoing);
+    EXPECT_EQ(g.reason(), ResultReason::None);
+    EXPECT_TRUE(g.play({7, 8}, 0));
+}

@@ -229,7 +229,7 @@ class GameState {
 public:
     bool play(Pos p, std::int64_t timeUsedMs);   // 合法則落子、記錄、更新結果
     bool undo(int plies);                         // 回傳是否成功；回傳後可從 lastUndone() 取得被撤銷的步
-    void finish(GameResult r, ResultReason why);  // 超時、認輸、斷線時由外部呼叫；已有結果時忽略（先發生者為準）
+    void finish(GameResult r, ResultReason why);  // 超時、認輸、斷線時由外部呼叫；已有結果或 r 為 Ongoing 時忽略（先發生者為準）
     const Board&       board() const;
     const MoveHistory& history() const;
     Stone        sideToMove() const;
