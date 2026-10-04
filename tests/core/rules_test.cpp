@@ -88,3 +88,60 @@ TEST(Rules, IsFullDetectsFullBoard) {
     }
     EXPECT_TRUE(Rules::isFull(b));
 }
+
+TEST(Rules, MakesFiveDiagonalIntoBottomRightCorner) {
+    Board b;
+    for (int i = 10; i <= 14; ++i) {
+        b.place({i, i}, Stone::Black);
+    }
+    EXPECT_TRUE(Rules::makesFive(b, {14, 14}));
+}
+
+TEST(Rules, MakesFiveAntiDiagonalIntoTopRightCorner) {
+    Board b;
+    for (int i = 0; i < 5; ++i) {
+        b.place({i, 14 - i}, Stone::White);
+    }
+    EXPECT_TRUE(Rules::makesFive(b, {0, 14}));
+}
+
+TEST(Rules, MakesFiveAlongBottomEdge) {
+    Board b;
+    for (int c = 10; c <= 14; ++c) {
+        b.place({14, c}, Stone::Black);
+    }
+    EXPECT_TRUE(Rules::makesFive(b, {14, 12}));
+}
+
+TEST(Rules, MakesFiveWhenLastMoveFillsGap) {
+    Board b;
+    for (int c : {3, 4, 6, 7}) {
+        b.place({5, c}, Stone::Black);
+    }
+    b.place({5, 5}, Stone::Black);
+    EXPECT_TRUE(Rules::makesFive(b, {5, 5}));
+}
+
+TEST(Rules, BrokenLineIsNotFive) {
+    Board b;
+    for (int c : {3, 4, 5, 7}) {
+        b.place({5, c}, Stone::Black);
+    }
+    EXPECT_FALSE(Rules::makesFive(b, {5, 7}));
+    EXPECT_FALSE(Rules::makesFive(b, {5, 5}));
+}
+
+TEST(Rules, OpponentStoneBreaksLine) {
+    Board b;
+    for (int c : {2, 3, 5, 6, 7}) {
+        b.place({5, c}, Stone::Black);
+    }
+    b.place({5, 4}, Stone::White);
+    EXPECT_FALSE(Rules::makesFive(b, {5, 7}));
+    EXPECT_FALSE(Rules::makesFive(b, {5, 4}));
+}
+
+TEST(Rules, MakesFiveOnEmptyCellIsFalse) {
+    Board b;
+    EXPECT_FALSE(Rules::makesFive(b, {7, 7}));
+}

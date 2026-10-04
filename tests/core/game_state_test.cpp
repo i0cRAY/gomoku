@@ -101,6 +101,39 @@ TEST(GameState, UndoMoreThanPlayedFails) {
     EXPECT_FALSE(g.undo(2));
 }
 
+TEST(GameState, UndoNonPositivePliesFails) {
+    GameState g;
+    ASSERT_TRUE(g.play({7, 7}, 0));
+    EXPECT_FALSE(g.undo(0));
+    EXPECT_FALSE(g.undo(-1));
+    EXPECT_EQ(g.history().size(), 1u);
+}
+
+TEST(GameState, UndoOnEmptyGameFails) {
+    GameState g;
+    EXPECT_FALSE(g.undo(1));
+    EXPECT_EQ(g.sideToMove(), Stone::Black);
+}
+
+TEST(GameState, UndoRestoresBoardHash) {
+    GameState g;
+    ASSERT_TRUE(g.play({7, 7}, 0));
+    const auto hashAfterFirstMove = g.board().hash();
+    ASSERT_TRUE(g.play({7, 8}, 0));
+    ASSERT_TRUE(g.play({8, 8}, 0));
+
+    ASSERT_TRUE(g.undo(2));
+    EXPECT_EQ(g.board().hash(), hashAfterFirstMove);
+}
+
+TEST(GameState, UndoSinglePlyGivesTurnBackToThatSide) {
+    GameState g;
+    ASSERT_TRUE(g.play({7, 7}, 0));   // black
+    ASSERT_TRUE(g.play({7, 8}, 0));   // white
+    ASSERT_TRUE(g.undo(1));
+    EXPECT_EQ(g.sideToMove(), Stone::White);
+}
+
 TEST(GameState, FailedUndoClearsLastUndone) {
     GameState g;
     ASSERT_TRUE(g.play({7, 7}, 0));

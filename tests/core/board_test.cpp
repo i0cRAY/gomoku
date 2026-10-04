@@ -67,6 +67,22 @@ TEST(Board, ZobristHashDiffersForDifferentBoards) {
     EXPECT_NE(a.hash(), b.hash());
 }
 
+TEST(Board, ZobristHashMatchesFreshBoardAfterPlaceRemoveSequence) {
+    Board incremental;
+    incremental.place({7, 7}, Stone::Black);
+    incremental.place({7, 8}, Stone::White);
+    incremental.place({8, 8}, Stone::Black);
+    incremental.remove({7, 8});
+    incremental.place({0, 14}, Stone::White);
+    incremental.remove({7, 7});
+
+    Board fresh;
+    fresh.place({8, 8}, Stone::Black);
+    fresh.place({0, 14}, Stone::White);
+
+    EXPECT_EQ(incremental.hash(), fresh.hash());
+}
+
 // Precondition violations abort via assert, which only exists in debug builds.
 class BoardDeathTest : public ::testing::Test {
 protected:
