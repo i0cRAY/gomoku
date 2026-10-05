@@ -8,5 +8,7 @@ add_library(core STATIC
         MoveHistory.cpp
         GameState.h
         GameState.cpp
+        GameRecord.h
+        GameRecord.cpp
 )
 target_include_directories(core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
