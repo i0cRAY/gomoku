@@ -1,6 +1,8 @@
 add_library(ui STATIC
         BoardGeometry.h
         BoardGeometry.cpp
+        BoardView.h
+        BoardView.cpp
         MainWindow.h
         MainWindow.cpp
 )
