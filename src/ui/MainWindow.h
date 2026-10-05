@@ -14,6 +14,7 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
 private:
+    void newGame();
     void onCellClicked(core::Pos pos);
     void refresh();
 

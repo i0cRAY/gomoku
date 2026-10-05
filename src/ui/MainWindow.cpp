@@ -3,7 +3,9 @@
 #include <optional>
 
 #include <QLabel>
+#include <QMenuBar>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QStatusBar>
 
 #include "BoardView.h"
@@ -42,16 +44,28 @@ QString resultText(core::GameResult r, core::ResultReason why) {
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    resize(640, 680);
+    resize(640, 700);
     setWindowTitle(tr("Gomoku"));
 
     m_boardView = new BoardView(this);
     setCentralWidget(m_boardView);
     connect(m_boardView, &BoardView::cellClicked, this, &MainWindow::onCellClicked);
 
+    // 固定在視窗內顯示，不交給 KDE 等桌面的全域選單
+    menuBar()->setNativeMenuBar(false);
+    QMenu* gameMenu = menuBar()->addMenu(tr("遊戲(&G)"));
+    gameMenu->addAction(tr("新對局(&N)"), QKeySequence::New, this, &MainWindow::newGame);
+    gameMenu->addSeparator();
+    gameMenu->addAction(tr("離開(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), this, &QWidget::close);
+
     m_statusLabel = new QLabel(this);
     statusBar()->addWidget(m_statusLabel);
 
+    refresh();
+}
+
+void MainWindow::newGame() {
+    m_state = core::GameState{};
     refresh();
 }
 
@@ -61,7 +75,15 @@ void MainWindow::onCellClicked(core::Pos pos) {
     }
     refresh();
     if (m_state.result() != core::GameResult::Ongoing) {
-        QMessageBox::information(this, tr("對局結束"), resultText(m_state.result(), m_state.reason()));
+        QMessageBox box(QMessageBox::Information, tr("對局結束"), resultText(m_state.result(), m_state.reason()),
+                        QMessageBox::NoButton, this);
+        QPushButton* again = box.addButton(tr("再來一局"), QMessageBox::AcceptRole);
+        box.addButton(tr("關閉"), QMessageBox::RejectRole);
+        box.setDefaultButton(again);
+        box.exec();
+        if (box.clickedButton() == again) {
+            newGame();
+        }
     }
 }
 
