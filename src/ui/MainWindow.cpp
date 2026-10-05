@@ -15,8 +15,11 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTimer>
+#include <QVBoxLayout>
 
 #include "BoardView.h"
+#include "ReplayControls.h"
 #include "SaveFormat.h"
 
 namespace {
@@ -52,6 +55,7 @@ QString resultText(core::GameResult r, core::ResultReason why) {
 
 const QString kFileSuffix = QStringLiteral(".gomoku.json");
 constexpr int kStatusMessageMs = 3000;
+constexpr int kAutoPlayIntervalMs = 1000;   // SDD §5.4
 
 QString fileFilter() {
     return MainWindow::tr("五子棋存檔 (*.gomoku.json)");
@@ -92,18 +96,42 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     resize(640, 700);
     setWindowTitle(tr("Gomoku"));
 
-    m_boardView = new BoardView(this);
-    setCentralWidget(m_boardView);
+    auto* central = new QWidget(this);
+    auto* layout = new QVBoxLayout(central);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    m_boardView = new BoardView(central);
+    layout->addWidget(m_boardView, 1);
+    m_replayControls = new ReplayControls(central);
+    m_replayControls->hide();
+    layout->addWidget(m_replayControls);
+    setCentralWidget(central);
     connect(m_boardView, &BoardView::cellClicked, this, &MainWindow::onCellClicked);
+
+    connect(m_replayControls, &ReplayControls::toStartRequested, this,
+            [this] { replayStep(&core::ReplayCursor::toStart); });
+    connect(m_replayControls, &ReplayControls::prevRequested, this,
+            [this] { replayStep(&core::ReplayCursor::prev); });
+    connect(m_replayControls, &ReplayControls::nextRequested, this,
+            [this] { replayStep(&core::ReplayCursor::next); });
+    connect(m_replayControls, &ReplayControls::toEndRequested, this,
+            [this] { replayStep(&core::ReplayCursor::toEnd); });
+    connect(m_replayControls, &ReplayControls::playPauseRequested, this, &MainWindow::toggleAutoPlay);
+    connect(m_replayControls, &ReplayControls::exitRequested, this, &MainWindow::exitReplay);
+
+    m_autoPlayTimer = new QTimer(this);
+    m_autoPlayTimer->setInterval(kAutoPlayIntervalMs);
+    connect(m_autoPlayTimer, &QTimer::timeout, this, &MainWindow::onAutoPlayTick);
 
     // 固定在視窗內顯示，不交給 KDE 等桌面的全域選單
     menuBar()->setNativeMenuBar(false);
     QMenu* gameMenu = menuBar()->addMenu(tr("遊戲(&G)"));
     gameMenu->addAction(tr("新對局(&N)"), QKeySequence::New, this, &MainWindow::newGame);
     gameMenu->addSeparator();
-    gameMenu->addAction(tr("存檔(&S)…"), QKeySequence::Save, this, &MainWindow::saveGame);
+    m_saveAction = gameMenu->addAction(tr("存檔(&S)…"), QKeySequence::Save, this, &MainWindow::saveGame);
     gameMenu->addAction(tr("讀檔(&O)…"), QKeySequence::Open, this, &MainWindow::loadGame);
     m_exportAction = gameMenu->addAction(tr("匯出棋譜(&E)…"), this, &MainWindow::exportRecord);
+    gameMenu->addAction(tr("回放棋譜(&R)…"), this, &MainWindow::startReplay);
     gameMenu->addSeparator();
     gameMenu->addAction(tr("離開(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), this, &QWidget::close);
 
@@ -116,17 +144,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 
 void MainWindow::newGame() {
+    stopAutoPlay();
+    m_replay.reset();
     m_state = core::GameState{};
     refresh();
 }
 
 void MainWindow::saveGame() {
+    if (m_replay) {
+        return;
+    }
     writeRecordFile(tr("存檔"));
 }
 
 // 棋譜與存檔格式相同（SDD §6.1），差別只在對局結束後才能匯出
 void MainWindow::exportRecord() {
-    if (m_state.result() == core::GameResult::Ongoing) {
+    if (m_replay || m_state.result() == core::GameResult::Ongoing) {
         return;
     }
     writeRecordFile(tr("匯出棋譜"));
@@ -176,9 +209,71 @@ void MainWindow::loadGame() {
         QMessageBox::warning(this, tr("讀檔失敗"), tr("目前只支援讀取本機雙人、不限時的對局"));
         return;
     }
+    stopAutoPlay();
+    m_replay.reset();
     m_state = std::move(game.state);
     refresh();
     statusBar()->showMessage(tr("已讀取 %1").arg(QFileInfo(path).fileName()), kStatusMessageMs);
+}
+
+// 回放會取代目前對局（SDD §11-6）；任何對戰類型都可回放（SDD §6.1）
+void MainWindow::startReplay() {
+    const QString path = QFileDialog::getOpenFileName(this, tr("回放棋譜"), m_lastDir, fileFilter());
+    if (path.isEmpty()) {
+        return;
+    }
+    m_lastDir = QFileInfo(path).absolutePath();
+
+    auto loaded = readRecordFile(path);
+    if (const auto* err = std::get_if<QString>(&loaded)) {
+        QMessageBox::warning(this, tr("無法回放"), *err);
+        return;
+    }
+    const core::GameState& replayed = std::get<LoadedGame>(loaded).state;
+    stopAutoPlay();
+    m_state = core::GameState{};
+    m_replay.emplace(replayed.history().moves());
+    m_replayResult = replayed.result();
+    m_replayReason = replayed.reason();
+    refresh();
+}
+
+// 回放開始時已取代原本的對局，結束後回到新對局
+void MainWindow::exitReplay() {
+    newGame();
+}
+
+void MainWindow::replayStep(bool (core::ReplayCursor::*move)()) {
+    if (!m_replay) {
+        return;
+    }
+    stopAutoPlay();
+    ((*m_replay).*move)();
+    refresh();
+}
+
+void MainWindow::toggleAutoPlay() {
+    if (!m_replay) {
+        return;
+    }
+    if (m_autoPlayTimer->isActive()) {
+        stopAutoPlay();
+    } else if (m_replay->index() < m_replay->size()) {
+        m_autoPlayTimer->start();
+        m_replayControls->setPlaying(true);
+    }
+}
+
+void MainWindow::onAutoPlayTick() {
+    if (!m_replay || !m_replay->next() || m_replay->index() == m_replay->size()) {
+        stopAutoPlay();
+    }
+    refresh();
+}
+
+void MainWindow::stopAutoPlay() {
+    m_autoPlayTimer->stop();
+    m_replayControls->setPlaying(false);
 }
 
 core::GameRecord MainWindow::currentRecord() const {
@@ -209,6 +304,21 @@ void MainWindow::onCellClicked(core::Pos pos) {
 }
 
 void MainWindow::refresh() {
+    m_replayControls->setVisible(m_replay.has_value());
+    if (m_replay) {
+        m_boardView->setBoard(m_replay->board(), m_replay->lastMove());
+        m_boardView->setInteractive(false);
+        m_saveAction->setEnabled(false);
+        m_exportAction->setEnabled(false);
+        m_replayControls->setPosition(m_replay->index(), m_replay->size());
+        QString text = tr("回放：第 %1 / %2 手").arg(m_replay->index()).arg(m_replay->size());
+        if (m_replay->index() == m_replay->size() && m_replayResult != core::GameResult::Ongoing) {
+            text += tr("　%1").arg(resultText(m_replayResult, m_replayReason));
+        }
+        m_statusLabel->setText(text);
+        return;
+    }
+
     const auto& moves = m_state.history().moves();
     const std::optional<core::Pos> lastMove =
         moves.empty() ? std::nullopt : std::optional<core::Pos>(moves.back().pos);
@@ -216,6 +326,7 @@ void MainWindow::refresh() {
 
     const bool ongoing = m_state.result() == core::GameResult::Ongoing;
     m_boardView->setInteractive(ongoing);
+    m_saveAction->setEnabled(true);
     m_exportAction->setEnabled(!ongoing);
     m_statusLabel->setText(ongoing ? tr("輪到%1").arg(sideName(m_state.sideToMove()))
                                    : resultText(m_state.result(), m_state.reason()));
