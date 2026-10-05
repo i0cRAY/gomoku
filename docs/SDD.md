@@ -450,9 +450,9 @@ namespace SaveFormat {
 | `version` | 是 | 目前為 `1`；其他值拒絕 |
 | `createdAt` | 是 | ISO 8601 字串，含時區 |
 | `matchType` | 是 | `local`、`human_vs_ai`、`ai_vs_ai`、`lan` |
-| `players.black` / `players.white` | 是 | `{ "type": "human" }` 或 `{ "type": "ai", "difficulty": "easy" \| "normal" \| "hard" }`；`lan` 雙方皆為 `human` |
+| `players.black` / `players.white` | 是 | `{ "type": "human" }` 或 `{ "type": "ai", "difficulty": "easy" \| "normal" \| "hard" }`。須與 `matchType` 一致：`local`、`lan` 雙方皆為 `human`；`human_vs_ai` 恰一方為 `ai`；`ai_vs_ai` 雙方皆為 `ai` |
 | `timeControl.mode` | 是 | `none` 或 `per_move` |
-| `timeControl.moveLimitMs` | `per_move` 時 | 每步限時毫秒數 |
+| `timeControl.moveLimitMs` | `per_move` 時 | 每步限時毫秒數，範圍 5000–300000（§3.2） |
 | `moves[]` | 是 | 可為空陣列；每項 `r`、`c` 為整數，`t` 為 ≥ 0 的整數 |
 | `moves[].t` | 是 | 該步已用毫秒數；非限時模式為 0。悔棋恢復時間依此計算 |
 | `current.remainingMs` | `per_move` 且未結束時 | 存檔當下輪到的一方剩餘時間；其他情況省略 |

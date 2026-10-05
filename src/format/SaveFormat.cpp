@@ -22,6 +22,8 @@ using core::PlayerType;
 using core::ResultReason;
 
 constexpr int kVersion = 1;
+constexpr std::int64_t kMinMoveLimitMs = 5000;     // SDD §3.2
+constexpr std::int64_t kMaxMoveLimitMs = 300000;
 const char* const kFormatName = "gomoku";
 
 template <typename E, std::size_t N>
@@ -176,6 +178,27 @@ core::PlayerInfo playerFromJson(const QJsonObject& players, const QString& key) 
     return p;
 }
 
+// players 須與 matchType 一致（SDD §6.1）
+void checkPlayersMatch(MatchType t, const core::PlayerInfo& black, const core::PlayerInfo& white) {
+    const int aiCount = (black.type == PlayerType::Ai) + (white.type == PlayerType::Ai);
+    int expected = 0;
+    switch (t) {
+        case MatchType::Local:
+        case MatchType::Lan:
+            expected = 0;
+            break;
+        case MatchType::HumanVsAi:
+            expected = 1;
+            break;
+        case MatchType::AiVsAi:
+            expected = 2;
+            break;
+    }
+    if (aiCount != expected) {
+        fail(QStringLiteral("players 與 matchType「%1」不一致").arg(nameOf(t, kMatchTypes)));
+    }
+}
+
 core::TimeControl timeControlFromJson(const QJsonObject& root) {
     const QJsonObject o = asObject(require(root, "timeControl", "timeControl"), "timeControl");
     const QString mode = asString(require(o, "mode", "timeControl.mode"), "timeControl.mode");
@@ -185,8 +208,8 @@ core::TimeControl timeControlFromJson(const QJsonObject& root) {
     if (mode == "per_move") {
         const QString path = "timeControl.moveLimitMs";
         const std::int64_t limit = asInteger(require(o, "moveLimitMs", path), path);
-        if (limit <= 0) {
-            fail(QStringLiteral("欄位 %1 必須大於 0").arg(path));
+        if (limit < kMinMoveLimitMs || limit > kMaxMoveLimitMs) {
+            fail(QStringLiteral("欄位 %1 必須介於 %2 與 %3 之間").arg(path).arg(kMinMoveLimitMs).arg(kMaxMoveLimitMs));
         }
         return {true, limit};
     }
@@ -251,6 +274,7 @@ core::GameRecord recordFromJson(const QJsonObject& root) {
     const QJsonObject players = asObject(require(root, "players", "players"), "players");
     r.black = playerFromJson(players, "black");
     r.white = playerFromJson(players, "white");
+    checkPlayersMatch(r.matchType, r.black, r.white);
 
     r.timeControl = timeControlFromJson(root);
     r.moves = movesFromJson(root);

@@ -136,9 +136,13 @@ TEST(SaveFormat, RoundTripTimedAiOngoingKeepsRemainingTime) {
 TEST(SaveFormat, RoundTripEveryMatchTypeAndDifficulty) {
     for (const MatchType t : {MatchType::Local, MatchType::HumanVsAi, MatchType::AiVsAi, MatchType::Lan}) {
         for (const Difficulty d : {Difficulty::Easy, Difficulty::Normal, Difficulty::Hard}) {
+            // 玩家組合須與 matchType 一致（SDD §6.1）
+            const PlayerInfo human{PlayerType::Human, std::nullopt};
+            const PlayerInfo ai{PlayerType::Ai, d};
             GameRecord r = sampleRecord();
             r.matchType = t;
-            r.black = {PlayerType::Ai, d};
+            r.black = t == MatchType::AiVsAi ? ai : human;
+            r.white = t == MatchType::HumanVsAi || t == MatchType::AiVsAi ? ai : human;
             expectSame(load(SaveFormat::toJson(r)), r);
         }
     }
@@ -340,4 +344,34 @@ TEST(SaveFormat, ErrorMessageNamesTheField) {
     const auto out = SaveFormat::fromJson(bytes(withFirstMove(example(), "r", "7")));
     ASSERT_TRUE(std::holds_alternative<QString>(out));
     EXPECT_TRUE(std::get<QString>(out).contains("moves[0].r")) << std::get<QString>(out).toStdString();
+}
+
+TEST(SaveFormat, PlayersMustMatchMatchType) {
+    const QJsonObject human{{"type", "human"}};
+    const QJsonObject ai{{"type", "ai"}, {"difficulty", "normal"}};
+    auto withPlayers = [](const char* matchType, const QJsonObject& black, const QJsonObject& white) {
+        QJsonObject o = example();
+        o["matchType"] = matchType;
+        o["players"] = QJsonObject{{"black", black}, {"white", white}};
+        return o;
+    };
+    EXPECT_TRUE(rejected(withPlayers("local", human, ai)));
+    EXPECT_TRUE(rejected(withPlayers("local", ai, ai)));
+    EXPECT_TRUE(rejected(withPlayers("lan", ai, human)));
+    EXPECT_TRUE(rejected(withPlayers("human_vs_ai", human, human)));
+    EXPECT_TRUE(rejected(withPlayers("human_vs_ai", ai, ai)));
+    EXPECT_TRUE(rejected(withPlayers("ai_vs_ai", human, ai)));
+
+    EXPECT_FALSE(rejected(withPlayers("local", human, human)));
+    EXPECT_FALSE(rejected(withPlayers("lan", human, human)));
+    EXPECT_FALSE(rejected(withPlayers("human_vs_ai", ai, human)));
+    EXPECT_FALSE(rejected(withPlayers("human_vs_ai", human, ai)));
+    EXPECT_FALSE(rejected(withPlayers("ai_vs_ai", ai, ai)));
+}
+
+TEST(SaveFormat, MoveLimitMustBeWithinAllowedRange) {
+    EXPECT_TRUE(rejected(withChild(example(), "timeControl", "moveLimitMs", 4999)));
+    EXPECT_TRUE(rejected(withChild(example(), "timeControl", "moveLimitMs", 300001)));
+    EXPECT_FALSE(rejected(withChild(example(), "timeControl", "moveLimitMs", 5000)));
+    EXPECT_FALSE(rejected(withChild(example(), "timeControl", "moveLimitMs", 300000)));
 }
