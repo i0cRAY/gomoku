@@ -22,15 +22,16 @@ ctest --test-dir build --output-on-failure      # 跑全部測試
 
 ## 目錄結構
 ```
-src/core/   Board, Rules, MoveHistory, GameState, GameClock —— 純 C++，禁止 include 任何 Qt 標頭
+src/core/   Board, Rules, MoveHistory, GameState, GameClock, GameRecord, ReplayCursor —— 純 C++，禁止 include 任何 Qt 標頭
 src/ai/     Minimax + Alpha-Beta、評估函數、候選步產生 —— 只依賴 core
+src/format/ SaveFormat：存檔／棋譜與 JSON 互轉 —— 只依賴 core 與 Qt6::Core
 src/net/    QTcpServer / QTcpSocket 連線與訊息協定
 src/ui/     Qt Widgets、BoardView（QPainter 繪製）、對話框
 src/app/    GameController：串起 core / ai / net / ui，管理回合與遊戲狀態
 tests/      GoogleTest，資料夾結構對應 src/
 docs/       SDD.md、棋譜格式說明
 ```
-依賴方向只能往下：ui / net / app → ai → core。core 不可反向依賴任何上層。
+依賴方向只能往下：ui / net / app → ai / format → core。core 不可反向依賴任何上層；format 不可依賴 ai / net / ui / app。
 
 ## 遊戲規則（固定，改規則要先改 SDD）
 - 棋盤 15×15，座標 (row, col)，皆從 0 開始，(0,0) 在左上角

@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 |---|---|
 | 作者 | 林希叡 |
-| 版本 | 0.2（草稿） |
+| 版本 | 0.3（草稿） |
 | 日期 | 2026-10-05 |
 | 語言／框架 | C++20、Qt 6（Widgets、Network）、GoogleTest、CMake |
 
@@ -104,14 +104,17 @@
 │ ui    MainWindow, BoardView, 對話框, ClockWidget │
 ├────────────────────────────────────────────┤
 │ app   GameController, Player（Human/AI/Remote） │
-├──────────────────────┬─────────────────────┤
-│ net  NetworkSession   │ ai  AIEngine, AIWorker │
-├──────────────────────┴─────────────────────┤
+├───────────────┬───────────────┬────────────┤
+│ net           │ ai  AIEngine,  │ format     │
+│ NetworkSession│     AIWorker   │ SaveFormat │
+├───────────────┴───────────────┴────────────┤
 │ core  Board, Rules, MoveHistory, GameState,  │
-│       GameClock, SaveFormat（純 C++，無 Qt）  │
+│       GameClock, GameRecord, ReplayCursor    │
+│       （純 C++，無 Qt）                       │
 └────────────────────────────────────────────┘
 ```
-依賴方向只能往下：ui / net / app → ai → core。core 不 include 任何 Qt 標頭，因此可以單獨用 GoogleTest 測試。
+依賴方向只能往下：ui / net / app → ai / format → core。core 不 include 任何 Qt 標頭，因此可以單獨用 GoogleTest 測試。
+format 只依賴 core 與 Qt6::Core（`QJsonDocument`），不依賴 ai、net、ui、app；ui 與 app 都可以使用它，避免 ui 與 app 互相依賴。
 
 ### 4.2 職責對應
 
@@ -121,7 +124,9 @@
 | 判斷能不能下、有沒有連五 | core | `Rules` |
 | 記錄每一步棋的順序 | core | `MoveHistory` |
 | 限時模式計時 | core | `GameClock` |
-| 存讀檔、棋譜格式 | core | `SaveFormat` |
+| 存檔內容、讀檔驗證 | core | `GameRecord` |
+| 存讀檔、棋譜的 JSON 格式 | format | `SaveFormat` |
+| 回放時逐步前進／後退 | core | `ReplayCursor` |
 | 幫電腦決定下哪裡 | ai | `AIEngine`、`Evaluator`、`AIWorker` |
 | 和另一台電腦傳送棋步 | net | `NetworkSession` |
 | 管理輪到誰、開始與結束 | app | `GameController` |
@@ -239,7 +244,52 @@ public:
 };
 ```
 
-**SaveFormat**：存檔與棋譜的序列化／反序列化，格式見 §6.1。core 不可依賴 Qt，因此 JSON 處理在此層自行實作最小版本，或改由 app 層用 `QJsonDocument` 處理（見 §11 待確認）。
+**GameRecord**：存檔／棋譜的內容（純資料），以及從空盤重播驗證的邏輯。JSON 轉換不在 core，見 §5.6。
+```cpp
+enum class MatchType  { Local, HumanVsAi, AiVsAi, Lan };
+enum class PlayerType { Human, Ai };
+enum class Difficulty { Easy, Normal, Hard };
+
+struct PlayerInfo {
+    PlayerType type;
+    std::optional<Difficulty> difficulty;   // 只有 Ai 有
+};
+
+struct TimeControl {
+    bool timed;                  // false = "none"，true = "per_move"
+    std::int64_t moveLimitMs;    // 非限時為 0
+};
+
+struct GameRecord {
+    std::string createdAt;                    // ISO 8601，由呼叫端提供
+    MatchType   matchType;
+    PlayerInfo  black, white;
+    TimeControl timeControl;
+    std::vector<Move> moves;                  // color 由黑先輪流推得
+    std::optional<std::int64_t> remainingMs;  // 限時且未結束時才有
+    GameResult   result;                      // 未結束為 Ongoing
+    ResultReason reason;
+};
+
+// 從空盤重播並依 §6.1 驗證；成功回傳重建的 GameState，失敗回傳錯誤訊息（含第幾手）
+std::variant<GameState, std::string> restore(const GameRecord& r);
+```
+
+**ReplayCursor**：回放時在棋步之間移動，不修改棋譜。
+```cpp
+class ReplayCursor {
+public:
+    explicit ReplayCursor(std::vector<Move> moves);
+    std::size_t index() const;            // 目前顯示前幾手，0 = 空盤
+    std::size_t size() const;             // 總手數
+    const Board& board() const;
+    std::optional<Pos> lastMove() const;
+    bool toStart();                       // 以下皆回傳是否有移動；已在邊界時不動
+    bool prev();
+    bool next();
+    bool toEnd();
+};
+```
 
 ### 5.2 ai
 
@@ -339,7 +389,7 @@ public:
 | `NewGameDialog` | 選擇對戰類型、顏色、難度、模式、每步秒數 |
 | `NetworkDialog` | 開房（顯示本機 IP 與 port）或加入（輸入 IP 與 port） |
 | `ClockWidget` | 顯示雙方剩餘時間；剩 5 秒以下變紅 |
-| `ReplayControls` | 回放時的上一步／下一步／開頭／結尾／自動播放 |
+| `ReplayControls` | 回放時的開頭／上一步／播放・暫停／下一步／結尾，以及結束回放；自動播放固定每步 1 秒，到最後一手自動停止。回放中棋盤不可落子，狀態列顯示「回放：第 n / N 手」 |
 
 ### 5.5 app — GameController 狀態
 
@@ -353,6 +403,17 @@ Idle ──讀棋譜──▶ Replaying
 ```
 - 限時模式下，`GameController` 用 QTimer 每 100 ms 檢查 `GameClock::isExpired()`
 - 落子到達時再檢查一次：若該步用時超過限時，視為超時，落子無效
+
+### 5.6 format
+
+```cpp
+namespace SaveFormat {
+    QByteArray toJson(const core::GameRecord& r);
+    // 解析並檢查欄位；成功回傳 GameRecord，失敗回傳錯誤訊息。棋步合法性再交給 core::restore 驗證
+    std::variant<core::GameRecord, QString> fromJson(const QByteArray& bytes);
+}
+```
+- `createdAt` 由呼叫端填入 `GameRecord`，SaveFormat 不讀系統時間，測試可重現
 
 ---
 
@@ -383,13 +444,42 @@ Idle ──讀棋譜──▶ Replaying
 
 | 欄位 | 說明 |
 |---|---|
-| `matchType` | `human_vs_ai`、`ai_vs_ai`、`lan`、`local` |
-| `timeControl.mode` | `none` 或 `per_move` |
-| `moves[].t` | 該步已用毫秒數；非限時模式為 0。悔棋恢復時間依此計算 |
-| `current.remainingMs` | 存檔當下輪到的一方剩餘時間；非限時模式省略 |
-| `result` | 結束時為 `{ "winner": "black" | "white" | null, "reason": "five_in_row" | "timeout" | ... }` |
+| 欄位 | 必要 | 說明 |
+|---|---|---|
+| `format` | 是 | 固定為 `"gomoku"` |
+| `version` | 是 | 目前為 `1`；其他值拒絕 |
+| `createdAt` | 是 | ISO 8601 字串，含時區 |
+| `matchType` | 是 | `local`、`human_vs_ai`、`ai_vs_ai`、`lan` |
+| `players.black` / `players.white` | 是 | `{ "type": "human" }` 或 `{ "type": "ai", "difficulty": "easy" \| "normal" \| "hard" }`；`lan` 雙方皆為 `human` |
+| `timeControl.mode` | 是 | `none` 或 `per_move` |
+| `timeControl.moveLimitMs` | `per_move` 時 | 每步限時毫秒數 |
+| `moves[]` | 是 | 可為空陣列；每項 `r`、`c` 為整數，`t` 為 ≥ 0 的整數 |
+| `moves[].t` | 是 | 該步已用毫秒數；非限時模式為 0。悔棋恢復時間依此計算 |
+| `current.remainingMs` | `per_move` 且未結束時 | 存檔當下輪到的一方剩餘時間；其他情況省略 |
+| `result` | 是 | 未結束為 `null`；結束為 `{ "winner": ..., "reason": ... }`，見下表 |
 
-**讀檔驗證**：從空盤依序重播 `moves`，每一步都用 `Rules::isLegal` 檢查；任何一步不合法、或結果與 `result` 不符，即拒絕讀檔。
+`result` 的值：
+
+| `reason` | `winner` | 對應 `ResultReason` |
+|---|---|---|
+| `five_in_row` | `black` / `white` | `FiveInRow` |
+| `board_full` | `null` | `BoardFull` |
+| `timeout` | `black` / `white` | `Timeout` |
+| `resign` | `black` / `white` | `Resign` |
+| `disconnect` | `black` / `white` | `Disconnect` |
+
+**讀檔驗證**：先檢查必要欄位與型別，缺欄位、型別錯誤、`format` 或 `version` 不符即拒絕；不認得的欄位忽略（保留向後相容）。接著從空盤依序重播 `moves`，每一步都用 `Rules::isLegal` 檢查，任何一步不合法即拒絕。最後比對結果：
+
+| `result` | 重播完畢後必須是 |
+|---|---|
+| `null` | 對局仍在進行（最後一步沒有造成連五或盤滿） |
+| `five_in_row` | 最後一步造成連五，且勝方與 `winner` 相同 |
+| `board_full` | 盤面已滿且無人連五 |
+| `timeout`、`resign`、`disconnect` | 對局仍在進行（無法從棋步驗證），再以 `GameState::finish()` 套用結果 |
+
+另外，任何一步之後若已分出勝負但後面還有棋步，同樣拒絕。
+
+**讀檔繼續與回放的支援範圍**：回放不需要玩家與計時資訊，任何 `matchType` 都可回放。讀檔後繼續對局則只支援程式目前已實作的類型（里程碑 3 時只有 `local` 且 `none`），其他類型提示「尚未支援」並拒絕。
 
 ### 6.2 連線計時
 - 只有 Host 的 `GameClock` 會判定超時
@@ -440,7 +530,9 @@ Idle ──讀棋譜──▶ Replaying
 | GameClock | 倒數正確；歸零 `isExpired`；`stopTurn` 回傳用時；`pause` 期間不扣時間；`startTurnWith` 恢復指定時間（全部用假時鐘，不 sleep） |
 | GameState | 黑先；輪流；勝負後拒絕落子；悔棋後局面與輪次正確；盤滿和局 |
 | 限時規則 | 超時判負；超時後的落子無效；悔棋恢復 18 秒的範例；提示期間不扣時間 |
-| SaveFormat | 存檔後讀回完全一致；非法棋步拒絕讀取；缺欄位、版本不符時拒絕 |
+| GameRecord | 合法棋譜重播後局面一致；非法棋步（越界、重複）拒絕；分出勝負後仍有棋步拒絕；`result` 與重播不符拒絕；timeout／resign 套用成功 |
+| SaveFormat | 存檔後讀回完全一致；不合法 JSON 不崩潰；缺欄位、型別錯誤、`format`／版本不符時拒絕；未知欄位忽略；§6.1 範例可讀入 |
+| ReplayCursor | 前進／後退／開頭／結尾的局面正確；在邊界時不移動；空棋譜 |
 | AIEngine | 一步連五必下；對方活四／衝四必擋；己方能做活四時優先；相同輸入結果一致；時間上限內回傳；取消後立即返回 |
 | Evaluator | 各棋型辨識正確（每種棋型至少一個正例、一個反例） |
 | 協定（net） | 訊息序列化／反序列化；不合法 JSON 不會崩潰 |
@@ -486,5 +578,6 @@ Idle ──讀棋譜──▶ Replaying
 1. **本機雙人對戰**：已決定加入（v0.2），以兩個 `HumanPlayer` 實作；悔棋每次撤銷一步（見 §7.2）。
 2. **區網連線的 AI 提示**：目前不提供（公平性，且暫停計時會讓對方空等）。
 3. **區網對局能否存檔續玩**：目前只能在結束後匯出棋譜，不能存到一半之後再連線續玩。
-4. **SaveFormat 的 JSON 處理**：core 不能用 Qt，選項為 (a) core 自行實作簡單 JSON 寫讀；(b) SaveFormat 移到 app 層使用 `QJsonDocument`，core 只提供資料結構。建議 (b)。
+4. **SaveFormat 的 JSON 處理**：已決定（v0.3）。core 提供 `GameRecord` 與重播驗證；JSON 轉換放在獨立的 `format` 模組，使用 `QJsonDocument`（見 §4.1、§5.6）。不放在 app，是因為 ui 也需要存讀檔，放在 app 會造成 ui 與 app 互相依賴。
 5. **電腦對電腦**：是否需要暫停／繼續、調整播放速度？
+6. **覆蓋目前對局的確認**：新對局、讀檔、回放會直接取代目前對局，目前不詢問。之後再決定是否加入「尚未儲存」的確認。
