@@ -10,5 +10,7 @@ add_library(core STATIC
         GameState.cpp
         GameRecord.h
         GameRecord.cpp
+        ReplayCursor.h
+        ReplayCursor.cpp
 )
 target_include_directories(core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
