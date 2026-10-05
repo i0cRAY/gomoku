@@ -1,4 +1,5 @@
 include(GoogleTest)
 
 add_subdirectory(core)
+add_subdirectory(format)
 add_subdirectory(ui)
