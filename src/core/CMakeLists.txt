@@ -8,6 +8,7 @@ add_library(core STATIC
         MoveHistory.cpp
         GameState.h
         GameState.cpp
+        ITimeSource.h
         GameRecord.h
         GameRecord.cpp
         ReplayCursor.h
