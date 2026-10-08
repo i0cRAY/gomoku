@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 |---|---|
 | 作者 | 林希叡 |
-| 版本 | 0.3（草稿） |
+| 版本 | 0.4（草稿） |
 | 日期 | 2026-10-05 |
 | 語言／框架 | C++20、Qt 6（Widgets、Network）、GoogleTest、CMake |
 
@@ -71,7 +71,7 @@
 | N1 | AI 思考期間 UI 不可卡頓，可正常拖動視窗與點按鈕 |
 | N2 | AI 在困難難度下每步不超過 5 秒（限時模式下另受剩餘時間限制） |
 | N3 | core 與 ai 模組有單元測試，CI 每次 push 自動編譯並跑測試 |
-| N4 | 相同局面與參數下 AI 結果可重現 |
+| N4 | 相同局面、相同參數、相同時間來源行為下，AI 結果可重現（測試以假時鐘達成）。實際對局受時間上限影響，不同速度的電腦可能搜到不同深度而下出不同的步 |
 
 ---
 
@@ -206,14 +206,18 @@ public:
 };
 ```
 
-**GameClock**（時間來源以介面注入，測試時使用假時鐘）
+**ITimeSource**（時間來源介面；AI 搜尋與 GameClock 共用）
 ```cpp
 class ITimeSource {
 public:
     virtual ~ITimeSource() = default;
-    virtual std::int64_t nowMs() const = 0;
+    virtual std::int64_t nowMs() const = 0;   // 單調遞增的毫秒數，起點不限
 };
+```
+core 只定義介面，不讀系統時間。測試使用假時鐘（可設定為每次讀取自動前進固定毫秒數）；實際讀時間的實作放在 app 層（里程碑 5，例如以 `QElapsedTimer` 實作）。
 
+**GameClock**（時間來源以介面注入，測試時使用假時鐘）
+```cpp
 class GameClock {
 public:
     GameClock(const ITimeSource& time, std::int64_t moveLimitMs);
@@ -297,46 +301,76 @@ public:
 struct SearchParams {
     int maxDepth;
     std::int64_t timeLimitMs;
-    int candidateRadius = 2;    // 只考慮已有棋子周圍 N 格內的空點
-    int maxCandidates   = 20;   // 排序後只展開前 N 個候選步
+    int candidateRadius = 2;              // 只考慮已有棋子周圍 N 格內的空點
+    int maxCandidates   = 20;             // 排序後只展開前 N 個候選步
+    bool useTranspositionTable = false;
 };
 
 struct SearchResult {
     Pos best;
-    int score;
-    int depthReached;
+    int score;              // 以 side 的角度；勝負分數見 §5.2.1
+    int depthReached;       // 最後一個完整搜完的深度；0 = 由戰術規則直接決定，或深度 1 未完成
     std::int64_t nodes;
-    bool cancelled;
+    bool cancelled;         // 因取消旗標而停止（時間到不算取消）
 };
 
 class AIEngine {
 public:
+    // 前置條件：對局進行中、棋盤未滿、輪到 side 下
     SearchResult search(const Board& b, Stone side, const SearchParams& params,
                         const std::atomic<bool>& cancel, const ITimeSource& time);
 };
+
+namespace Evaluator {
+    enum class Pattern { None, Two, OpenTwo, Three, OpenThree, Four, OpenFour, Five };
+    int evaluate(const Board& b, Stone side);                          // 局面分，以 side 的角度
+    std::vector<Pattern> patternsInLine(const std::vector<Stone>& line, Stone side);  // 測試用
+}
+
+// 候選步：依 §5.2.1 產生並排序，最多 maxCount 個
+std::vector<Pos> generateCandidates(const Board& b, Stone side, int radius, int maxCount);
+
+SearchParams paramsFor(Difficulty d);   // Difficulty 定義於 core（§5.1）
+SearchParams hintParams();
 ```
 
 #### 5.2.1 搜尋
-- **迭代加深**：深度 1, 2, 3… 逐層搜尋；時間到或被取消時，回傳最後一個完整搜完的深度的結果
-- **Negamax + Alpha-Beta 剪枝**
-- **候選步產生**：只取已有棋子周圍 `candidateRadius` 格內的空點；空盤時下天元 `(7,7)`
-- **著法排序**：先用快速評估排序候選步，提高剪枝效率；上一層的最佳步優先
-- **戰術優先**：自己能連五先下；對方能連五必擋；之後才進入一般搜尋
-- **置換表**：以 `Board::hash()` 為 key 快取已搜過的局面（可在里程碑 4 後期再加入）
-- 不使用亂數，確保結果可重現
+- **戰術優先**（搜尋前，`depthReached = 0`）：
+  1. 自己有能連五的點 → 直接下（多個時取排序第一個）
+  2. 對方有能連五的點 → 下在該點擋住（多個時擋不完，取排序第一個）
+  3. 否則進入一般搜尋
+- **迭代加深**：深度 1, 2, 3… 到 `maxDepth` 逐層搜尋；時間到或被取消時，回傳最後一個完整搜完的深度的結果。若深度 1 尚未完成就停止，回傳排序第一的候選步（`depthReached = 0`）。找到必勝或必敗（分數絕對值 ≥ 勝利分數 − 1000）時不再加深
+- **Negamax + Alpha-Beta 剪枝**：分數一律以輪到的一方的角度
+- **終局分數**：某步造成連五 → 勝利分數 100,000,000 − 層數（越快贏分數越高、越慢輸分數越高）；盤滿 → 0；到達深度 → 評估函數
+- **候選步產生**：已有棋子周圍 `candidateRadius` 格內（切比雪夫距離，即 8 方向）的空點；空盤時只有天元 `(7,7)`
+- **著法排序**：每個候選點的分數 = 自己下在該點時，通過該點的四條線上己方棋型分數的增加量，加上對方下在該點時對方棋型分數的增加量（進攻 + 防守）。依分數高到低排序，同分時 row 小的優先，再比 col 小的優先；只保留前 `maxCandidates` 個。根節點上一層的最佳步移到最前面
+- **時間與取消檢查**：每搜 256 個節點檢查一次取消旗標與時間；超過 `timeLimitMs` 或被取消時，放棄目前這一層
+- **置換表**（`useTranspositionTable` 時）：以 `Board::hash()` 為 key（五子棋中輪到誰由棋子數決定，所以 hash 已足以區分）；固定 2^20 個項目，新結果直接覆蓋；每次 `search()` 開始時清空，確保每次呼叫結果只取決於輸入。存入勝負分數時換算為相對該節點的層數
+- 不使用亂數，同分時依固定順序選擇，確保結果可重現
 
 #### 5.2.2 評估函數
-對雙方在四個方向上的棋型計分，局面分 = 己方分數 − 對方分數 × 1.1（略偏重防守）。
+對雙方在四個方向上的棋型計分，局面分 = 己方分數 − 對方分數 × 11 / 10（整數運算，略偏重防守）。
 
-| 棋型 | 定義 | 分數（初值，待調整） |
-|---|---|---|
-| 連五 | 五子相連 | 10,000,000 |
-| 活四 | 四子相連，兩端皆空 | 100,000 |
-| 衝四 | 四子，只有一個點能成五 | 10,000 |
-| 活三 | 能形成活四的三子 | 5,000 |
-| 眠三 | 只能形成衝四的三子 | 500 |
-| 活二 | 能形成活三的二子 | 200 |
-| 眠二 | 只能形成眠三的二子 | 50 |
+**線、區段、棋組**
+- **線**：棋盤上某個方向（橫、直、兩條斜線）的一整列格子；長度不到 5 的斜線忽略。
+- **區段**：評估某一方時，對方的棋子與棋盤邊界視為阻隔，把線切成數段。長度不到 5 的區段無法成五，不計分。
+- **棋組**：區段內己方棋子依「相鄰兩子之間最多隔 1 個空點」分組。例如 `XX_X` 是一組，`XX__X` 是兩組。
+- 每個棋組**單獨**判定棋型（同區段的其他棋組視為空點），只歸類為一種（取最強的），分數相加。
+
+**棋型判定**（「成五」= 連成 5 子以上；「放一子」只考慮同區段內的空點）
+
+| 棋型 | 判定 | 例（X 己方，O 對方或邊界，_ 空） | 分數（初值，待調整） |
+|---|---|---|---|
+| 連五 | 已有 5 子以上相連 | `XXXXX` | 10,000,000 |
+| 活四 | 至少 2 個空點各自能成五 | `_XXXX_`、`X_XXX_X` | 100,000 |
+| 衝四 | 恰好 1 個空點能成五 | `OXXXX_`、`X_XXX`、`XX_XX` | 10,000 |
+| 活三 | 不是四，且放一子後能成為活四 | `__XXX_`、`_XX_X_` | 5,000 |
+| 眠三 | 不是活三，但放一子後能成為衝四 | `OXXX__`、`X_X_X`、`O_XXX_O` | 500 |
+| 活二 | 不是三，且放一子後能成為活三 | `__XX__`、`_X_X__` | 200 |
+| 眠二 | 不是活二，但放一子後能成為眠三 | `OXX___`、`OX_X__` | 50 |
+| 無 | 以上皆非（含單子） | `X`、`OXXO` | 0 |
+
+判定只取決於「區段長度」與「棋組在區段內的位置」，實作可預先計算或快取。
 
 #### 5.2.3 難度
 | 難度 | maxDepth | timeLimitMs | 其他 |
@@ -344,9 +378,11 @@ public:
 | 簡單 | 2 | 1,000 | maxCandidates = 8 |
 | 普通 | 4 | 3,000 | — |
 | 困難 | 10（迭代加深） | 5,000 | 啟用置換表 |
-| 提示 | 同困難 | 3,000 | — |
+| 提示 | 10（同困難） | 3,000 | 啟用置換表（同困難） |
 
-限時模式下 `timeLimitMs` 再取 min(上表數值, 剩餘時間 − 300 ms)。
+未列出的參數使用 `SearchParams` 預設值。限時模式下 `timeLimitMs` 再取 min(上表數值, 剩餘時間 − 300 ms)。
+
+**難度的測試標準**（基本戰術，見 §8）：簡單需通過 a–c；普通需通過 a–e；困難需通過 a–g。
 
 #### 5.2.4 執行緒
 - `AIWorker`（QObject）以 `moveToThread` 放進專用 `QThread`
@@ -533,8 +569,9 @@ namespace SaveFormat {
 | GameRecord | 合法棋譜重播後局面一致；非法棋步（越界、重複）拒絕；分出勝負後仍有棋步拒絕；`result` 與重播不符拒絕；timeout／resign 套用成功 |
 | SaveFormat | 存檔後讀回完全一致；不合法 JSON 不崩潰；缺欄位、型別錯誤、`format`／版本不符時拒絕；未知欄位忽略；§6.1 範例可讀入 |
 | ReplayCursor | 前進／後退／開頭／結尾的局面正確；在邊界時不移動；空棋譜 |
-| AIEngine | 一步連五必下；對方活四／衝四必擋；己方能做活四時優先；相同輸入結果一致；時間上限內回傳；取消後立即返回 |
-| Evaluator | 各棋型辨識正確（每種棋型至少一個正例、一個反例） |
+| Evaluator | 各棋型辨識正確（每種棋型至少一個正例、一個反例，含棋盤邊緣、中間有空格、被對方擋住）；局面分以 side 角度且對稱 |
+| 候選步 | 空盤只回傳天元；只含半徑內空點；排序與同分順序固定；數量上限 |
+| AIEngine | 基本戰術（每項至少一個局面，另加鏡像或旋轉版本）：a. 自己一步連五必下；b. 對方有四（衝四或活四）必擋；c. 雙方都有四時先連五；d. 對方活三必擋；e. 自己能做活四且對方無四時做活四；f. 能下四三時下四三；g. 對方下一步能成四三或雙三時先防守。另測：相同輸入結果一致；時間上限內回傳；取消後立即返回；深度 1 未完成即取消仍回傳合法步；置換表開關在固定深度下結果相同（全部使用假時鐘） |
 | 協定（net） | 訊息序列化／反序列化；不合法 JSON 不會崩潰 |
 
 連線、UI 以手動測試為主，測試步驟記錄於 `docs/manual-test.md`。
