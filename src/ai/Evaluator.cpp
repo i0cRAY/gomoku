@@ -143,6 +143,12 @@ void forEachGroup(const Stone* line, int len, Stone side, Visit visit) {
     }
 }
 
+int lineScore(const Stone* line, int len, Stone side) {
+    int total = 0;
+    forEachGroup(line, len, side, [&](Pattern p) { total += patternScore(p); });
+    return total;
+}
+
 // 四個方向：橫、直、左上到右下、右上到左下
 constexpr std::array<Pos, 4> kDirections{{{0, 1}, {1, 0}, {1, 1}, {1, -1}}};
 
@@ -195,10 +201,34 @@ int patternScore(Pattern p) {
 
 int sideScore(const Board& b, Stone side) {
     int total = 0;
-    forEachLine(b, [&](const Stone* line, int len) {
-        forEachGroup(line, len, side, [&](Pattern p) { total += patternScore(p); });
-    });
+    forEachLine(b, [&](const Stone* line, int len) { total += lineScore(line, len, side); });
     return total;
+}
+
+int pointGain(const Board& b, Pos p, Stone side) {
+    int gain = 0;
+    std::array<Stone, Board::kSize> buf{};
+    for (const Pos d : kDirections) {
+        Pos start = p;
+        while (b.inBounds({start.row - d.row, start.col - d.col})) {
+            start = {start.row - d.row, start.col - d.col};
+        }
+        int len = 0;
+        int index = 0;
+        for (Pos q = start; b.inBounds(q); q = {q.row + d.row, q.col + d.col}) {
+            if (q == p) {
+                index = len;
+            }
+            buf[len++] = b.at(q);
+        }
+        if (len < kMinSegment) {
+            continue;
+        }
+        const int before = lineScore(buf.data(), len, side);
+        buf[index] = side;
+        gain += lineScore(buf.data(), len, side) - before;
+    }
+    return gain;
 }
 
 int evaluate(const Board& b, Stone side) {

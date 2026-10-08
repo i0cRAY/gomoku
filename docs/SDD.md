@@ -324,6 +324,7 @@ public:
 namespace Evaluator {
     enum class Pattern { None, Two, OpenTwo, Three, OpenThree, Four, OpenFour, Five };
     int evaluate(const Board& b, Stone side);                          // 局面分，以 side 的角度
+    int pointGain(const Board& b, Pos p, Stone side);                  // side 下在 p 時，通過 p 的四條線上 side 棋型分數的增加量
     std::vector<Pattern> patternsInLine(const std::vector<Stone>& line, Stone side);  // 測試用
 }
 

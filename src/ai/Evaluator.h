@@ -18,6 +18,9 @@ int evaluate(const core::Board& b, core::Stone side);
 // side 所有棋型分數的總和（不扣對方）
 int sideScore(const core::Board& b, core::Stone side);
 
+// side 下在空點 p 時，通過 p 的四條線上 side 棋型分數的增加量（候選步排序用，不修改棋盤）
+int pointGain(const core::Board& b, core::Pos p, core::Stone side);
+
 // 一條線上 side 各棋組的棋型，依線上位置由左到右，不含 None。線的兩端視為棋盤邊界
 std::vector<Pattern> patternsInLine(const std::vector<core::Stone>& line, core::Stone side);
 

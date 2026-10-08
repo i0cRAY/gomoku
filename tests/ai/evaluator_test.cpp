@@ -204,3 +204,32 @@ TEST(Evaluator, ShortDiagonalIgnored) {
     placeAll(b, {{0, 3}, {1, 2}, {2, 1}, {3, 0}}, Stone::Black);
     EXPECT_EQ(ai::Evaluator::evaluate(b, Stone::Black), 0);
 }
+
+// ---- 單點增益（候選步排序用，SDD §5.2.1） ----
+
+TEST(Evaluator, PointGainIsPatternIncreaseOnLinesThroughPoint) {
+    Board b;
+    placeAll(b, {{7, 6}, {7, 7}, {7, 8}}, Stone::Black);
+    // 黑下 (7,9)：橫向活三 → 活四；其他方向是單子
+    EXPECT_EQ(ai::Evaluator::pointGain(b, {7, 9}, Stone::Black), 100'000 - 5'000);
+    // 黑下 (7,4)：X_XXX 成為衝四
+    EXPECT_EQ(ai::Evaluator::pointGain(b, {7, 4}, Stone::Black), 10'000 - 5'000);
+    // 白下 (7,9)：白方只是單子
+    EXPECT_EQ(ai::Evaluator::pointGain(b, {7, 9}, Stone::White), 0);
+}
+
+TEST(Evaluator, PointGainCountsEveryDirection) {
+    Board b;
+    placeAll(b, {{7, 6}, {6, 7}, {6, 6}, {6, 8}}, Stone::Black);
+    // (7,7) 同時和四個方向的黑子各形成活二
+    EXPECT_EQ(ai::Evaluator::pointGain(b, {7, 7}, Stone::Black), 4 * 200);
+}
+
+TEST(Evaluator, PointGainDoesNotModifyBoard) {
+    Board b;
+    b.place({7, 7}, Stone::Black);
+    const auto hash = b.hash();
+    ai::Evaluator::pointGain(b, {7, 8}, Stone::Black);
+    EXPECT_EQ(b.hash(), hash);
+    EXPECT_EQ(b.at({7, 8}), Stone::Empty);
+}
